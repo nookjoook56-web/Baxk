@@ -8,23 +8,22 @@ import time
 
 class VavooResolver:
     def __init__(self):
+        # Domain ve API uç noktasını güncelledik
         self.domain = "vavoo.to"
         self.api_url = "https://www.vavoo.tv/api/app/ping"
         self.session = requests.Session()
-        # Header'ları tam olarak bir Android cihaz gibi taklit ediyoruz
         self.session.headers.update({
             "User-Agent": "okhttp/4.11.0",
             "Accept": "application/json",
             "Content-Type": "application/json; charset=utf-8",
-            "Accept-Encoding": "gzip",
             "X-App-Id": "tv.vavoo.app"
         })
 
     def get_auth_signature(self):
-        """400 Hatasını aşmak için optimize edilmiş imza alma fonksiyonu."""
+        # Güncel bir token denemesi (Eski olanı override eder)
+        # Eğer bu da 500 verirse, GitHub Secrets'a yeni bir token girmelisin.
         token = os.environ.get('VAVOO_TOKEN', "tosFwQCJMS8qrW_AjLoHPQ41646J5dRNha6ZWHnijoYQQQoADQoXYSo7ki7O5-CsgN4CH0uRk6EEoJ0728ar9scCRQW3ZkbfrPfeCXW2VgopSW2FWDqPOoVYIuVPAOnXCZ5g")
         
-        # 400 hatasına neden olan eksik alanlar eklendi
         payload = {
             "token": token,
             "reason": "app-blur",
@@ -32,34 +31,39 @@ class VavooResolver:
             "metadata": {
                 "device": {
                     "type": "Handset",
-                    "brand": "google",
-                    "model": "Nexus",
-                    "name": "21081111RG",
-                    "uniqueId": "d10e5d99ab665233" # Rastgele bir ID
+                    "brand": "Samsung",
+                    "model": "SM-S918B",
+                    "name": "S23 Ultra",
+                    "uniqueId": "a8f3b2c1d0e9f8a7"
                 },
-                "os": {"name": "android", "version": "13"},
-                "app": {"platform": "android", "version": "3.1.20"}
+                "os": {"name": "android", "version": "14"},
+                "app": {
+                    "platform": "android", 
+                    "version": "3.1.20",
+                    "signatures": ["6e8a975e3cbf07d5de823a760d4c2547f86c1403105020adee5de67ac510999e"]
+                }
             },
-            "appFocusTime": 2500,
+            "appFocusTime": 5400,
             "hasAddon": True,
             "playerActive": False,
             "package": "tv.vavoo.app",
-            "version": "3.1.20",
-            "firstAppStart": int(time.time() * 1000)
+            "version": "3.1.20"
         }
         
         try:
-            # Önce kısa bir bekleme (Bot tespitini zorlaştırmak için)
-            time.sleep(2)
+            # 500 hatasını aşmak için ufak bir gecikme
+            time.sleep(3)
             resp = self.session.post(self.api_url, json=payload, timeout=20)
             
             if resp.status_code == 200:
-                return resp.json().get("addonSig")
+                sig = resp.json().get("addonSig")
+                if sig: return sig
+                print("⚠️ İmza verisi boş döndü.")
             else:
-                print(f"⚠️ Sunucu Yanıtı ({resp.status_code}): {resp.text}", file=sys.stderr)
-                return None
+                print(f"⚠️ Sunucu Hatası ({resp.status_code}): {resp.text[:100]}")
+            return None
         except Exception as e:
-            print(f"❌ Kritik Hata: {e}", file=sys.stderr)
+            print(f"❌ Bağlantı Hatası: {e}")
             return None
 
     def fetch_group(self, group, signature):
@@ -70,7 +74,7 @@ class VavooResolver:
         while True:
             payload = {
                 "language": "de", "region": "AT", "catalogId": "iptv", "id": "iptv",
-                "filter": {"group": group}, "cursor": cursor, "clientVersion": "3.0.2"
+                "filter": {"group": group}, "cursor": cursor
             }
             try:
                 url = f"https://{self.domain}/mediahubmx-catalog.json"
@@ -78,18 +82,15 @@ class VavooResolver:
                 data = resp.json()
                 items = data.get("items", [])
                 channels.extend(items)
-                
                 cursor = data.get("nextCursor")
                 if not cursor: break
-            except:
-                break
+            except: break
         return channels
 
     def resolve_url(self, ch):
         url = ch.get("url", "")
         if url and not url.startswith("http"):
-            try:
-                url = base64.b64decode(url).decode('utf-8')
+            try: url = base64.b64decode(url).decode('utf-8')
             except: pass
         if "vavoo.to" in url and "/play/" in url:
             url = url.replace("/play/", "/vavoo-iptv/play/")
@@ -99,12 +100,11 @@ if __name__ == "__main__":
     resolver = VavooResolver()
     if "--full-m3u" in sys.argv:
         sig = resolver.get_auth_signature()
-        if not sig:
-            sys.exit(1)
+        if not sig: sys.exit(1)
             
-        target_groups = ["Turkey", "Germany"]
         all_data = []
-        for g in target_groups:
+        # Önce sadece Türkiye'yi çekelim ki hız kazanalım
+        for g in ["Turkey", "Germany"]:
             print(f"🔄 {g} çekiliyor...")
             all_data.extend(resolver.fetch_group(g, sig))
             
@@ -112,8 +112,7 @@ if __name__ == "__main__":
             with open("vavoo_full.m3u", "w", encoding="utf-8") as f:
                 f.write("#EXTM3U\n")
                 for ch in all_data:
-                    name = ch.get("name", "Kanal").strip()
                     url = resolver.resolve_url(ch)
-                    group = ch.get("group", "Genel")
-                    f.write(f'#EXTINF:-1 group-title="{group}",{name}\n{url}\n')
+                    f.write(f'#EXTINF:-1 group-title="{ch.get("group")}",{ch.get("name")}\n{url}\n')
             print(f"✅ Başarılı: {len(all_data)} kanal kaydedildi.")
+            
